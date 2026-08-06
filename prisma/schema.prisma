@@ -692,13 +692,17 @@ model EmailLog {
   recipient        String
   subject          String?
   template         String?
+  html             String?
+  text             String?
   status           EmailStatus @default(PENDING)
+  retryCount       Int         @default(0)
   errorMessage     String?
   providerResponse Json?
   sentAt           DateTime?
   createdAt        DateTime    @default(now())
 
   @@index([recipient])
+  @@index([template])
   @@index([status])
   @@index([createdAt])
   @@map("email_logs")

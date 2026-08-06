@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard, Users, GraduationCap, ClipboardList, CalendarCheck,
   FileText, Settings, MessageSquare, PhoneCall, LogOut, ChevronLeft,
-  BarChart3, BookOpen, StickyNote, Video, Library
+  BarChart3, BookOpen, StickyNote, Video, Library, Mail
 } from 'lucide-react';
 
 interface NavItem {
@@ -53,6 +53,7 @@ const ADMIN_NAV: NavItem[] = [
   { label: 'Live Sessions', href: '/dashboard/admin/live-sessions', icon: <Video className="w-4 h-4" /> },
   { label: 'Reports', href: '/dashboard/admin/reports', icon: <BarChart3 className="w-4 h-4" /> },
   { label: 'SMS Logs', href: '/dashboard/admin/sms-logs', icon: <MessageSquare className="w-4 h-4" /> },
+  { label: 'Email Logs', href: '/dashboard/admin/email-logs', icon: <Mail className="w-4 h-4" /> },
   { label: 'Settings', href: '/dashboard/admin/settings', icon: <Settings className="w-4 h-4" /> },
 ];
 

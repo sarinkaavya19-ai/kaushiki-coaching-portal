@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db/prisma';
 import { withRole, type AuthenticatedRequest } from '@/lib/auth/middleware';
 import { bulkAttendanceSchema } from '@/lib/validators/attendance';
+import { dispatchAttendanceWarnings } from '@/lib/attendance/warnings';
 
 export const POST = withRole(['FACULTY', 'ADMIN'], async (req) => {
   const { user } = req as AuthenticatedRequest;
@@ -77,6 +78,11 @@ export const POST = withRole(['FACULTY', 'ADMIN'], async (req) => {
 
       return { created, updated };
     });
+
+    void dispatchAttendanceWarnings({
+      batchId,
+      month: sessionDate.slice(0, 7),
+    }).catch((err) => console.error('[Attendance Warning] Dispatch failed:', err));
 
     return NextResponse.json(result, { status: 201 });
   } catch (err) {

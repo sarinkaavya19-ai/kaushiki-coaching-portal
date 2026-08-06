@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db/prisma';
 import { withRole, type AuthenticatedRequest } from '@/lib/auth/middleware';
 import { manualGradeSchema } from '@/lib/validators/tests';
+import { dispatchTestScorecard } from '@/lib/email/scorecard';
 
 export const PATCH = withRole(['FACULTY', 'ADMIN'], async (req, { params }) => {
   const { user } = req as AuthenticatedRequest;
@@ -131,10 +132,22 @@ export const PATCH = withRole(['FACULTY', 'ADMIN'], async (req, { params }) => {
         }
       }
 
-      return updatedAttempt;
+      return { updatedAttempt, totalScore, allGraded };
     });
 
-    return NextResponse.json(result);
+    const { updatedAttempt, totalScore, allGraded } = result;
+
+    if (allGraded) {
+      void dispatchTestScorecard({
+        studentId: attempt.studentId,
+        testTitle: test.title,
+        totalMarks: test.totalMarks,
+        score: totalScore,
+        remarks: updatedAttempt.feedback,
+      }).catch((err) => console.error('[Scorecard Email] Dispatch failed:', err));
+    }
+
+    return NextResponse.json(updatedAttempt);
   } catch (err: any) {
     console.error('[Manual Grade Attempt] Error:', err);
     return NextResponse.json(
