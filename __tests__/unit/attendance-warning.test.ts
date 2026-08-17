@@ -2,7 +2,7 @@ const mockSendEmailWithFallback = jest.fn();
 const mockIsEmailConfigured = jest.fn().mockReturnValue(true);
 const mockUserFindUnique = jest.fn();
 const mockParentLinkFindMany = jest.fn();
-const mockEmailLogCreate = jest.fn();
+const mockLogEmailDispatch = jest.fn();
 
 jest.mock('@/lib/email', () => ({
   sendEmailWithFallback: (...args: any[]) => mockSendEmailWithFallback(...args),
@@ -13,20 +13,23 @@ jest.mock('@/lib/db/prisma', () => ({
   prisma: {
     user: { findUnique: (...args: any[]) => mockUserFindUnique(...args) },
     parentStudentLink: { findMany: (...args: any[]) => mockParentLinkFindMany(...args) },
-    emailLog: { create: (...args: any[]) => mockEmailLogCreate(...args) },
   },
 }));
 
-import { dispatchTestScorecard } from '@/lib/email/scorecard';
+jest.mock('@/lib/email/audit', () => ({
+  logEmailDispatch: (...args: any[]) => mockLogEmailDispatch(...args),
+}));
 
-describe('dispatchTestScorecard', () => {
+import { dispatchLowAttendanceWarning } from '@/lib/email/attendance-warning';
+
+describe('dispatchLowAttendanceWarning', () => {
   const baseInput = {
     studentId: 'student-1',
-    testTitle: 'Chapter 1 – MCQ',
-    totalMarks: 10,
-    score: 7,
-    remarks: 'Good attempt',
-    gradedAt: new Date('2026-08-05T10:00:00Z'),
+    attendancePercentage: 60,
+    threshold: 75,
+    presentSessions: 6,
+    totalSessions: 10,
+    monthLabel: 'August 2026',
   };
 
   beforeEach(() => {
@@ -35,47 +38,38 @@ describe('dispatchTestScorecard', () => {
     mockUserFindUnique.mockResolvedValue({ name: 'Arjun Patil', email: 'arjun@example.com' });
     mockParentLinkFindMany.mockResolvedValue([]);
     mockSendEmailWithFallback.mockResolvedValue({ success: true, data: { id: 'msg-1', provider: 'resend' } });
-    mockEmailLogCreate.mockResolvedValue({ id: 'log-1' });
+    mockLogEmailDispatch.mockResolvedValue('log-1');
   });
 
-  it('sends to the student and all linked parents', async () => {
+  it('sends to all approved parents of the student', async () => {
     mockParentLinkFindMany.mockResolvedValue([
       { parent: { name: 'Suresh Patil', email: 'suresh@example.com' } },
       { parent: { name: 'Anita Patil', email: 'anita@example.com' } },
     ]);
 
-    const result = await dispatchTestScorecard(baseInput);
+    const result = await dispatchLowAttendanceWarning(baseInput);
 
-    expect(mockSendEmailWithFallback).toHaveBeenCalledTimes(3);
+    expect(mockSendEmailWithFallback).toHaveBeenCalledTimes(2);
     const recipients = mockSendEmailWithFallback.mock.calls.map(([options]) => options.to);
-    expect(recipients).toEqual(expect.arrayContaining(['arjun@example.com', 'suresh@example.com', 'anita@example.com']));
+    expect(recipients).toEqual(expect.arrayContaining(['suresh@example.com', 'anita@example.com']));
     expect(mockSendEmailWithFallback).toHaveBeenCalledWith(
       expect.objectContaining({
-        subject: `Your scorecard for ${baseInput.testTitle} – Kaushiki Classes`,
+        subject: `Attendance Alert: Arjun Patil below 75% – Kaushiki Classes`,
         html: expect.stringContaining('Arjun Patil'),
-        text: expect.stringContaining('70%'),
+        text: expect.stringContaining('60%'),
       })
     );
-    expect(result.sent).toBe(3);
+    expect(result.sent).toBe(2);
     expect(result.failed).toBe(0);
     expect(result.success).toBe(true);
   });
 
-  it('sends a parent-oriented copy to linked parents', async () => {
+  it('only queries approved parent links for the student', async () => {
     mockParentLinkFindMany.mockResolvedValue([
       { parent: { name: 'Suresh Patil', email: 'suresh@example.com' } },
     ]);
 
-    await dispatchTestScorecard(baseInput);
-
-    const parentCall = mockSendEmailWithFallback.mock.calls.find(([options]) => options.to === 'suresh@example.com');
-    expect(parentCall[0].html).toContain('Your ward');
-  });
-
-  it('only queries approved parent links for the student', async () => {
-    mockParentLinkFindMany.mockResolvedValue([]);
-
-    await dispatchTestScorecard(baseInput);
+    await dispatchLowAttendanceWarning(baseInput);
 
     expect(mockParentLinkFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -90,56 +84,46 @@ describe('dispatchTestScorecard', () => {
       { parent: { name: 'Anita Patil', email: null } },
     ]);
 
-    const result = await dispatchTestScorecard(baseInput);
+    const result = await dispatchLowAttendanceWarning(baseInput);
 
-    expect(mockSendEmailWithFallback).toHaveBeenCalledTimes(2);
-    expect(result.recipients).toEqual(['arjun@example.com', 'suresh@example.com']);
+    expect(mockSendEmailWithFallback).toHaveBeenCalledTimes(1);
+    expect(result.recipients).toEqual(['suresh@example.com']);
   });
 
-  it('does not send anything when there are no email addresses', async () => {
-    mockUserFindUnique.mockResolvedValue({ name: 'Arjun Patil', email: null });
+  it('does not send anything when there are no approved parents with email', async () => {
     mockParentLinkFindMany.mockResolvedValue([]);
 
-    const result = await dispatchTestScorecard(baseInput);
+    const result = await dispatchLowAttendanceWarning(baseInput);
 
     expect(mockSendEmailWithFallback).not.toHaveBeenCalled();
     expect(result.sent).toBe(0);
     expect(result.success).toBe(true);
   });
 
-  it('includes the graded date label in the email', async () => {
-    await dispatchTestScorecard(baseInput);
-
-    expect(mockSendEmailWithFallback).toHaveBeenCalledWith(
-      expect.objectContaining({
-        html: expect.stringContaining('Graded on'),
-      })
-    );
-  });
-
-  it('writes an email log for every recipient', async () => {
+  it('logs an email audit entry with the ATTENDANCE_WARNING type', async () => {
     mockParentLinkFindMany.mockResolvedValue([
       { parent: { name: 'Suresh Patil', email: 'suresh@example.com' } },
     ]);
 
-    await dispatchTestScorecard(baseInput);
+    await dispatchLowAttendanceWarning(baseInput);
 
-    expect(mockEmailLogCreate).toHaveBeenCalledTimes(2);
-    expect(mockEmailLogCreate).toHaveBeenCalledWith(
+    expect(mockLogEmailDispatch).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({
-          recipientEmail: 'arjun@example.com',
-          template: 'TEST_SCORECARD',
-          status: 'SENT',
-        }),
+        recipientEmail: 'suresh@example.com',
+        emailType: 'ATTENDANCE_WARNING',
+        template: 'attendance_warning',
+        status: 'SENT',
       })
     );
   });
 
   it('counts failed deliveries without throwing', async () => {
+    mockParentLinkFindMany.mockResolvedValue([
+      { parent: { name: 'Suresh Patil', email: 'suresh@example.com' } },
+    ]);
     mockSendEmailWithFallback.mockResolvedValue({ success: false, error: new Error('resend down') });
 
-    const result = await dispatchTestScorecard(baseInput);
+    const result = await dispatchLowAttendanceWarning(baseInput);
 
     expect(result.failed).toBe(1);
     expect(result.sent).toBe(0);
@@ -148,9 +132,12 @@ describe('dispatchTestScorecard', () => {
   });
 
   it('never rejects even when the email provider rejects', async () => {
+    mockParentLinkFindMany.mockResolvedValue([
+      { parent: { name: 'Suresh Patil', email: 'suresh@example.com' } },
+    ]);
     mockSendEmailWithFallback.mockRejectedValue(new Error('network error'));
 
-    const result = await dispatchTestScorecard(baseInput);
+    const result = await dispatchLowAttendanceWarning(baseInput);
 
     expect(result.failed).toBe(1);
     expect(result.errors[0]).toContain('network error');
@@ -159,7 +146,7 @@ describe('dispatchTestScorecard', () => {
   it('never rejects when the database lookups fail', async () => {
     mockUserFindUnique.mockRejectedValue(new Error('db down'));
 
-    await expect(dispatchTestScorecard(baseInput)).resolves.toMatchObject({
+    await expect(dispatchLowAttendanceWarning(baseInput)).resolves.toMatchObject({
       success: false,
       errors: ['db down'],
     });
@@ -168,7 +155,7 @@ describe('dispatchTestScorecard', () => {
   it('skips dispatch when email is not configured', async () => {
     mockIsEmailConfigured.mockReturnValue(false);
 
-    const result = await dispatchTestScorecard(baseInput);
+    const result = await dispatchLowAttendanceWarning(baseInput);
 
     expect(mockSendEmailWithFallback).not.toHaveBeenCalled();
     expect(mockUserFindUnique).not.toHaveBeenCalled();

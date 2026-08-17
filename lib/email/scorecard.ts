@@ -22,7 +22,7 @@ async function logEmailDelivery(args: {
   try {
     await prisma.emailLog.create({
       data: {
-        recipient: args.recipient,
+        recipientEmail: args.recipient,
         subject: args.subject,
         template: SCORECARD_TEMPLATE,
         status: args.status,
